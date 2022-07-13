@@ -15,53 +15,59 @@
 #![feature(allocator_api)]
 #![feature(core_intrinsics)]
 #![feature(libc)]
+#![feature(rustc_private)]
 
 // The minimum alignment guaranteed by the architecture. This value is used to
 // add fast paths for low alignment values. In practice, the alignment is a
 // constant at the call site and the branch will be optimized out.
-#[cfg(all(any(target_arch = "x86",
-              target_arch = "arm",
-              target_arch = "mips",
-              target_arch = "powerpc",
-              target_arch = "powerpc64",
-              target_arch = "asmjs",
-              target_arch = "wasm32")))]
+#[cfg(all(any(
+    target_arch = "x86",
+    target_arch = "arm",
+    target_arch = "mips",
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "asmjs",
+    target_arch = "wasm32"
+)))]
 const MIN_ALIGN: usize = 8;
-#[cfg(all(any(target_arch = "x86_64",
-              target_arch = "aarch64",
-              target_arch = "mips64",
-              target_arch = "s390x",
-              target_arch = "sparc64")))]
+#[cfg(all(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "mips64",
+    target_arch = "s390x",
+    target_arch = "sparc64"
+)))]
 const MIN_ALIGN: usize = 16;
 
-use core::alloc::{Alloc, GlobalAlloc, AllocErr, Layout}; 
+use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::ptr::NonNull;
 
 pub struct System;
 
-unsafe impl Alloc for System {
+unsafe impl Allocator for System {
     #[inline]
-    unsafe fn alloc(&mut self, layout: Layout) -> Result<NonNull<u8>, AllocErr> {
-        NonNull::new(GlobalAlloc::alloc(self, layout)).ok_or(AllocErr)
+    fn allocate(self: &System, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        NonNull::new(unsafe {
+            core::slice::from_raw_parts_mut(GlobalAlloc::alloc(self, layout), layout.size())
+        })
+        .ok_or(AllocError)
     }
 
     #[inline]
-    unsafe fn alloc_zeroed(&mut self, layout: Layout) -> Result<NonNull<u8>, AllocErr> {
-        NonNull::new(GlobalAlloc::alloc_zeroed(self, layout)).ok_or(AllocErr)
+    fn allocate_zeroed(self: &System, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        NonNull::new(unsafe {
+            core::slice::from_raw_parts_mut(GlobalAlloc::alloc_zeroed(self, layout), layout.size())
+        })
+        .ok_or(AllocError)
     }
 
     #[inline]
-    unsafe fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
+    unsafe fn deallocate(self: &System, ptr: NonNull<u8>, layout: Layout) {
         GlobalAlloc::dealloc(self, ptr.as_ptr(), layout)
     }
 
     #[inline]
-    unsafe fn realloc(&mut self,
-                      ptr: NonNull<u8>,
-                      layout: Layout,
-                      new_size: usize) -> Result<NonNull<u8>, AllocErr> {
-        NonNull::new(GlobalAlloc::realloc(self, ptr.as_ptr(), layout, new_size)).ok_or(AllocErr)
-    }
+    unsafe fn grow(&self)
 }
 
 mod realloc_fallback {
@@ -70,8 +76,12 @@ mod realloc_fallback {
     use core::ptr;
 
     impl super::System {
-        pub(crate) unsafe fn realloc_fallback(&self, ptr: *mut u8, old_layout: Layout,
-                                              new_size: usize) -> *mut u8 {
+        pub(crate) unsafe fn realloc_fallback(
+            &self,
+            ptr: *mut u8,
+            old_layout: Layout,
+            new_size: usize,
+        ) -> *mut u8 {
             // Docs for GlobalAlloc::realloc require this to be valid:
             let new_layout = Layout::from_size_align_unchecked(new_size, old_layout.align());
 
@@ -91,9 +101,9 @@ mod platform {
 
     use core::ptr;
 
-    use MIN_ALIGN;
-    use System;
     use core::alloc::{GlobalAlloc, Layout};
+    use System;
+    use MIN_ALIGN;
 
     unsafe impl GlobalAlloc for System {
         #[inline]
@@ -104,7 +114,7 @@ mod platform {
                 #[cfg(target_os = "macos")]
                 {
                     if layout.align() > (1 << 31) {
-                        return ptr::null_mut()
+                        return ptr::null_mut();
                     }
                 }
                 aligned_malloc(&layout)
