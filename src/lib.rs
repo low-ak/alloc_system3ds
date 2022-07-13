@@ -65,9 +65,6 @@ unsafe impl Allocator for System {
     unsafe fn deallocate(self: &System, ptr: NonNull<u8>, layout: Layout) {
         GlobalAlloc::dealloc(self, ptr.as_ptr(), layout)
     }
-
-    #[inline]
-    unsafe fn grow(&self)
 }
 
 mod realloc_fallback {
